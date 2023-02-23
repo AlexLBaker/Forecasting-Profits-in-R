@@ -1,0 +1,635 @@
+---
+title: "GM"
+output: html_document
+date: "2023-02-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+library(reshape2)
+library(forecast)
+library(zoo)
+
+# need this for SMA function
+library(TTR)
+
+library(tibble)
+
+library(fpp2)
+
+
+# Animation
+library(gganimate)
+library(gifski)
+library(transformr)
+```
+
+```{r}
+df = read.csv("SalesData.csv")
+df
+dfs = df
+```
+
+```{r}
+df <- df %>% select(Ship.Date, Sales, Profit, Sub.Category)
+
+
+# convert the "date" column to a date
+df$Ship.Date = as.Date(df$Ship.Date, format = "%m/%d/%Y")
+
+df$month = format(df$Ship.Date,
+                        format = "%Y-%m")
+
+# aggregate by sub.category and month
+df_agg = aggregate(cbind(Profit, Sales) ~ Sub.Category + month, df, sum)
+
+df_agg = arrange(df_agg, month)
+
+# Removing all of January 2018 as it has significantly lower sales
+df_agg = df_agg[1:787, ]
+
+df_agg = arrange(df_agg, month)
+
+df_agg$GM = (df_agg$Profit / df_agg$Sales) * 100
+
+names(df_agg) = c("product", "month", "profit", "sales", "gm")
+
+df_agg
+
+```
+
+```{r}
+df_summary <- df_agg %>% 
+  group_by(month) %>% 
+  summarise(highest_margin = max(gm),
+            lowest_margin = min(gm))
+
+# Join the original data frame with the summary data frame to get the product associated with the highest and lowest gross margins
+df_join <- df_agg %>% 
+  left_join(df_summary, by = "month") %>% 
+  mutate(highest_product = if_else(gm == highest_margin, product, NA_character_),
+         lowest_product = if_else(gm == lowest_margin, product, NA_character_))
+
+# Count the number of times a product has the highest and lowest gross margins for each month
+df_counts <- df_join %>% 
+  group_by(month, product) %>% 
+  summarise(count_highest = sum(!is.na(highest_product)),
+            count_lowest = sum(!is.na(lowest_product)))
+```
+
+```{r}
+df_counts
+```
+
+```{r}
+max_high <- df_counts %>%
+  filter(count_highest == max(count_highest)) %>%
+  select(product, count_highest)
+
+# Group the data by product, summarize the count_highest column, and arrange by descending order of count
+df_counts_h <- max_high %>%
+  group_by(product) %>%
+  summarise(total_count = sum(count_highest)) %>%
+  arrange(desc(total_count))
+
+# Select the top 3 products with the highest count
+top_products <- df_counts_h %>%
+  top_n(100, total_count)
+
+top_products = top_products %>% arrange(desc(total_count))
+
+top_products$product = factor(top_products$product, levels = top_products$product[order(-top_products$total_count)])
+
+top_products
+
+max_low <- df_counts %>%
+  filter(count_lowest == max(count_lowest)) %>%
+  select(product, count_lowest)
+
+# Group the data by product, summarize the count_highest column, and arrange by descending order of count
+df_counts_l <- max_low %>%
+  group_by(product) %>%
+  summarise(total_count = sum(count_lowest)) %>%
+  arrange(desc(total_count))
+
+# Select the top 3 products with the highest count
+bad_products <- df_counts_l %>%
+  top_n(3, total_count)
+
+
+bad_products = bad_products %>% arrange(desc(total_count))
+
+bad_products$product = factor(bad_products$product, levels = bad_products$product[order(-bad_products$total_count)])
+
+bad_products
+
+```
+
+```{r}
+best3_gm = top_products %>% ggplot(aes(x = product, y = total_count)) + 
+  geom_bar(stat = "identity", fill = "orange") + 
+  ggtitle("Best Performing Products (Gorss Margin)") + 
+  geom_text(aes(label = total_count), vjust = -0.5, size = 3.5) +
+  xlab("Product Sub Type Name") + 
+  ylab("Number of Occurrences") +
+  coord_cartesian(ylim = c(0, 25))
+
+ggsave("best3_gm.png", plot = best3_gm, width = 8, height = 6, dpi = 500)
+
+best3_gm
+```
+
+```{r}
+worst3_gm = bad_products %>% ggplot(aes(x = product, y = total_count)) + 
+  geom_bar(stat = "identity", fill = "orange") + 
+  ggtitle("Worst Performing Products (Gross Margin)") + 
+  geom_text(aes(label = total_count), vjust = -0.5, size = 3.5) +
+  xlab("Product Sub Type Name") + 
+  ylab("Number of Occurrences") +
+  coord_cartesian(ylim = c(0, 20))
+
+ggsave("worst3_gm.png", plot = worst3_gm, width = 8, height = 6, dpi = 500)
+
+worst3_gm
+```
+
+```{r}
+df_agg
+
+top3 = c("Labels", "Envelopes", "Paper")
+bot3 = c("Tables", "Binders", "Machines")
+
+df.t3 = df_agg %>% filter(product %in% top3)
+df.b3 = df_agg %>% filter(product %in% bot3)
+
+df.t3
+df.b3
+```
+
+```{r}
+top3_gm_ts = ggplot(df.t3, aes(x = month, y = gm, color = product, group = product)) + 
+  geom_line(linewidth = 1) + 
+  labs(x = "Month", y = "Gross Margins (%)", color = "Product Sub Category") +
+  theme(axis.text.x = element_text(angle = 90, size = 9), 
+        axis.text.y = element_text(size = 12),
+        axis.line = element_line(colour = "black"),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        legend.position = "bottom",
+        legend.title = element_text(size = 14, face = "bold"),
+        legend.text = element_text(size = 10)) +
+  guides(col = guide_legend(nrow = 2)) +
+  ggtitle("Monthly Gross Margins from Top 3 Products")
+
+ggsave("top3_gm_ts.png", plot = top3_gm_ts, width = 12, height = 8, dpi = 700)
+top3_gm_ts
+```
+
+```{r}
+ind_prod.t3 = df.t3 %>% group_split(product)
+
+envelopes = data.frame(ind_prod.t3[[1]])[, c(2, 5)]
+labels = data.frame(ind_prod.t3[[2]])[, c(2, 5)]
+paper = data.frame(ind_prod.t3[[3]])[, c(2, 5)]
+
+env.ts = ts(envelopes, start = c(2014, 1), end = c(2017, 12), freq = 12)[, -1]
+lab.ts = ts(labels, start = c(2014, 1), end = c(2017, 12), freq = 12)[, -1]
+pap.ts = ts(paper, start = c(2014, 1), end = c(2017, 12), freq = 12)[, -1]
+```
+
+```{r}
+env_decomp = autoplot(stats::decompose(env.ts)) + ggtitle("Envelopes GM Decomposition")
+ggsave("env_decomp.png", plot = env_decomp, width = 8, height = 6, dpi = 500)
+
+
+lab_decomp = autoplot(stats::decompose(lab.ts)) + ggtitle("Labels GM Decomposition")
+ggsave("lab_decomp.png", plot = lab_decomp, width = 8, height = 6, dpi = 500)
+
+
+pap_decomp = autoplot(stats::decompose(pap.ts)) + ggtitle("Paper GM Decomposition")
+ggsave("pap_decomp.png", plot = pap_decomp, width = 8, height = 6, dpi = 500)
+
+```
+
+
+
+```{r}
+bot3_gm_ts = ggplot(df.b3, aes(x = month, y = gm, color = product, group = product)) + 
+  geom_line(linewidth = 1) + 
+  labs(x = "Month", y = "Gross Margins (%)", color = "Product Sub Category") +
+  theme(axis.text.x = element_text(angle = 90, size = 9), 
+        axis.text.y = element_text(size = 12),
+        axis.line = element_line(colour = "black"),
+        axis.title.x = element_text(size = 12),
+        axis.title.y = element_text(size = 12),
+        legend.position = "bottom",
+        legend.title = element_text(size = 14, face = "bold"),
+        legend.text = element_text(size = 10)) +
+  guides(col = guide_legend(nrow = 2)) +
+  ggtitle("Monthly Gross Margins from Bottom 3 Products")
+
+ggsave("bot3_gm_ts.png", plot = bot3_gm_ts, width = 12, height = 8, dpi = 700)
+bot3_gm_ts
+```
+
+```{r}
+ind_prod.b3 = df.b3 %>% group_split(product)
+ind_prod.b3
+
+bin.ts = ts(data.frame(ind_prod.b3[[1]])[, c(2, 5)], start = c(2014, 1), end = c(2017, 12), freq = 12 )[, -1]
+mach.ts = ts(data.frame(ind_prod.b3[[2]])[, c(2, 5)], start = c(2014, 1), end = c(2017, 12), freq = 12 )[, -1]
+tab.ts = ts(data.frame(ind_prod.b3[[3]])[, c(2, 5)], start = c(2014, 1), end = c(2017, 12), freq = 12 )[, -1]
+```
+
+```{r}
+bin_decomp = autoplot(stats::decompose(bin.ts)) + ggtitle("Binders GM Decomposition")
+ggsave("bin_decomp.png", plot = bin_decomp, width = 8, height = 6, dpi = 500)
+
+mach_decomp = autoplot(stats::decompose(mach.ts)) + ggtitle("Machines GM Decomposition")
+ggsave("mach_decomp.png", plot = mach_decomp, width = 8, height = 6, dpi = 500)
+
+tab_decomp = autoplot(stats::decompose(tab.ts)) + ggtitle("Tables GM Decomposition")
+ggsave("tab_decomp.png", plot = tab_decomp, width = 8, height = 6, dpi = 500)
+```
+
+```{r}
+# Top 3 GM
+env.train = window(env.ts, start = c(2014, 1), end = c(2016, 12), freq = 12)
+env.valid = window(env.ts, start = c(2017, 1), end = c(2017, 12), freq = 12)
+
+lab.train = window(lab.ts, start = c(2014, 1), end = c(2016, 12), freq = 12)
+lab.valid = window(lab.ts, start = c(2017, 1), end = c(2017, 12), freq = 12)
+
+pap.train = window(pap.ts, start = c(2014, 1), end = c(2016, 12), freq = 12)
+pap.valid = window(pap.ts, start = c(2017, 1), end = c(2017, 12), freq = 12)
+
+# Bottom 3 GM
+bin.train = window(bin.ts, start = c(2014, 1), end = c(2016, 12), freq = 12)
+bin.valid = window(bin.ts, start = c(2017, 1), end = c(2017, 12), freq = 12)
+
+mach.train = window(mach.ts, start = c(2014, 1), end = c(2016, 12), freq = 12)
+mach.valid = window(mach.ts, start = c(2017, 1), end = c(2017, 12), freq = 12)
+
+tab.train = window(tab.ts, start = c(2014, 1), end = c(2016, 12), freq = 12)
+tab.valid = window(tab.ts, start = c(2017, 1), end = c(2017, 12), freq = 12)
+```
+
+```{r}
+env_train.quad.lm = tslm(env.train ~ trend + I(trend^2) + season, lambda = 0)
+env_train.quad.lm.pred = forecast(env_train.lm, h = 12, level = 0)
+
+env_train.expo.lm = tslm(env.train ~ trend + season, lambda = 0)
+env_train.expo.lm.pred = forecast(env_train.lm, h = 12, level = 0)
+
+env_train.add.lm = tslm(env.train ~ trend + season, lambda = 1)
+env_train.add.lm.pred = forecast(env_train.lm, h = 12, level = 0)
+
+env_train.arima = Arima(env.train, order = c(0,1,0), seasonal = c(1,0,1))
+env_train.arima.pred = forecast(env_train.lm, h = 12, level = 0)
+
+env_train.add.hw = hw(env.train, seasonal = "additive", h = 12, level = 0)
+env_train.mult.hw = hw(env.train, seasonal = "multiplicative", h = 12, level = 0)
+
+env_train_graph = autoplot(env.train, size = 1) + 
+  autolayer(env.valid, series = "Validation Set", size = 1) + 
+  autolayer(env_train.add.lm.pred, series = "Additive Model", PI = FALSE, size = 1) + 
+  autolayer(env_train.arima.pred, series = "ARIMA (0,1,0)(1,0,1)[12]", PI = FALSE, size = 1)  + 
+  autolayer(env_train.expo.lm.pred, series = "Exponential Model", PI = FALSE, size = 1) + 
+  autolayer(env_train.add.hw, series = "HW Additive Model", PI = FALSE, size = 1) +
+  autolayer(env_train.mult.hw, series = "HW Multiplicative Seasonal", PI = FALSE, size = 1) +
+  autolayer(env_train.quad.lm.pred, series = "Quadratic Exponential Model", PI = FALSE, size = 1) + 
+  xlab("Year") +
+  ylab("Gross Margins (%)") +
+  ggtitle("12 Month Envelopes GM Training Forecast") +
+  guides(colour = guide_legend(title = "Forecast")) + 
+  scale_y_continuous()
+
+ggsave("env_train_graph.png", plot = env_train_graph, width = 8, height = 6, dpi = 500)
+
+env_train_graph
+```
+
+```{r}
+# HW Additive performed best
+accuracy(env_train.quad.lm.pred, env.valid)
+accuracy(env_train.expo.lm.pred, env.valid)
+accuracy(env_train.add.lm.pred, env.valid)
+accuracy(env_train.arima.pred, env.valid)
+accuracy(env_train.add.hw, env.valid)
+accuracy(env_train.mult.hw, env.valid)
+```
+
+```{r}
+env_for = hw(env.ts, seasonal = "additive", h = 12)
+
+env_for_graph = autoplot(env.ts, size = 1) + 
+  autolayer(env_for, series = "HW Seasonal Additive", PI = TRUE, size = 1) + 
+  autolayer(meanf(env.ts, h = 12), series = "Mean", PI = FALSE, size = 1) + 
+  autolayer(naive(env.ts, h = 12), series = "Naïve", PI = FALSE, size = 1) + 
+  xlab("Year") + 
+  ylab("Gross Margin (%)") + 
+  ggtitle("12 Month Envelopes GM Forecast (2018)") + 
+  guides(colour = guide_legend(title = "Forecast"))
+
+ggsave("env_for_graph.png", plot = env_for_graph, width = 8, height = 6, dpi = 500)
+
+env_for_graph
+  
+```
+
+
+```{r}
+lab_train.add.lm = tslm(lab.train ~ trend + season, lambda = 1)
+lab_train.add.lm.pred = forecast(lab_train.add.lm, h = 12, level = 0)
+
+lab_train.auto.arima = auto.arima(lab.train)
+lab_train.auto.arima.pred = forecast(lab_train.auto.arima, h = 12, level = 0)
+
+lab_train.expo.lm = tslm(lab.train ~ trend + season, lambda = 0)
+lab_train.expo.lm.pred = forecast(lab_train.expo.lm, h = 12, level = 0)
+
+lab_train.add.hw = hw(lab.train, seasonal = "additive", h = 12, level = 0)
+lab_train.mult.hw = hw(lab.train, seasonal = "multiplicative", h = 12, level = 0)
+
+lab_train.quad.lm = tslm(lab.train ~ trend + I(trend^2) + season, lambda = 0)
+lab_train.quad.lm.pred = forecast(lab_train.quad.lm, h = 12, level = 0)
+
+lab_train_graph = autoplot(lab.train, size = 1) + 
+  autolayer(lab.valid, series = "Validation Set", size = 1) + 
+  autolayer(lab_train.add.lm.pred, series = "Additive Model", PI = FALSE, size = 1) + 
+  autolayer(lab_train.auto.arima.pred, series = "ARIMA (0,0,0)(1,0,0)[12]", PI = FALSE, size = 1)  + 
+  autolayer(lab_train.expo.lm.pred, series = "Exponential Model", PI = FALSE, size = 1) + 
+  autolayer(lab_train.add.hw, series = "HW Additive Model", PI = FALSE, size = 1) +
+  autolayer(lab_train.mult.hw, series = "HW Multiplicative Seasonal", PI = FALSE, size = 1) +
+  autolayer(lab_train.quad.lm.pred, series = "Quadratic Exponential Model", PI = FALSE, size = 1) + 
+  xlab("Year") +
+  ylab("Gross Margins (%)") +
+  ggtitle("12 Month Phones Profits Training Forecast") +
+  guides(colour = guide_legend(title = "Forecast")) + 
+  scale_y_continuous()
+
+ggsave("lab_train_graph.png", plot = lab_train_graph, width = 8, height = 6, dpi = 500)
+
+lab_train_graph
+```
+
+```{r}
+# Linear Additive Model is best
+accuracy(lab_train.quad.lm.pred, lab.valid)
+accuracy(lab_train.expo.lm.pred, lab.valid)
+accuracy(lab_train.add.lm.pred, lab.valid)
+accuracy(lab_train.auto.arima.pred, lab.valid)
+accuracy(lab_train.add.hw, lab.valid)
+accuracy(lab_train.mult.hw, lab.valid)
+```
+
+```{r}
+lab_for = tslm(lab.ts ~ trend + season, lambda = 1)
+lab_for.pred = forecast(lab_for, h = 12)
+
+lab_for_graph = autoplot(lab.ts, size = 1) + 
+  autolayer(lab_for.pred, series = "Additive Model", PI = TRUE, size = 1) + 
+  autolayer(meanf(lab.ts, h = 12), series = "Mean", PI = FALSE, size = 1) + 
+  autolayer(naive(lab.ts, h = 12), series = "Naïve", PI = FALSE, size = 1) + 
+  xlab("Year") + 
+  ylab("Gross Margin (%)") + 
+  ggtitle("12 Month Labels GM Forecast (2018)") + 
+  guides(colour = guide_legend(title = "Forecast"))
+
+ggsave("lab_for_graph.png", plot = lab_for_graph, width = 8, height = 6, dpi = 500)
+
+lab_for_graph
+  
+```
+
+## I'm tired of plotting so no more, just model fitting
+```{r}
+pap_train.add.lm = tslm(pap.train ~ trend + season, lambda = 1)
+pap_train.add.lm.pred = forecast(pap_train.add.lm, h = 12, level = 0)
+
+pap_train.auto.arima = auto.arima(pap.train)
+pap_train.auto.arima.pred = forecast(pap_train.auto.arima, h = 12, level = 0)
+
+pap_train.expo.lm = tslm(pap.train ~ trend + season, lambda = 0)
+pap_train.expo.lm.pred = forecast(pap_train.expo.lm, h = 12, level = 0)
+
+pap_train.add.hw = hw(pap.train, seasonal = "additive", h = 12, level = 0)
+pap_train.mult.hw = hw(pap.train, seasonal = "multiplicative", h = 12, level = 0)
+
+pap_train.quad.lm = tslm(pap.train ~ trend + I(trend^2) + season, lambda = 0)
+pap_train.quad.lm.pred = forecast(pap_train.quad.lm, h = 12, level = 0)
+
+# Mult HW model did best
+accuracy(pap_train.add.lm.pred, pap.valid)
+accuracy(pap_train.auto.arima.pred, pap.valid)
+accuracy(pap_train.expo.lm.pred, pap.valid)
+accuracy(pap_train.add.hw, pap.valid)
+accuracy(pap_train.mult.hw, pap.valid)
+accuracy(pap_train.quad.lm.pred, pap.valid)
+
+pap_for = hw(lab.ts, seasonal = "multiplicative", h = 12)
+
+pap_for_graph = autoplot(pap.ts, size = 1) + 
+  autolayer(pap_for, series = "HW Seasonal Multiplicative", PI = TRUE, size = 1) + 
+  autolayer(meanf(pap.ts, h = 12), series = "Mean", PI = FALSE, size = 1) + 
+  autolayer(naive(pap.ts, h = 12), series = "Naïve", PI = FALSE, size = 1) + 
+  xlab("Year") + 
+  ylab("Gross Margin (%)") + 
+  ggtitle("12 Month Paper GM Forecast (2018)") + 
+  guides(colour = guide_legend(title = "Forecast"))
+
+ggsave("pap_for_graph.png", plot = pap_for_graph, width = 8, height = 6, dpi = 500)
+
+pap_for_graph
+```
+
+```{r}
+# Due to negative values, seasonality can't be multiplicative
+bin_train.add.lm = tslm(bin.train ~ trend + season, lambda = 1)
+bin_train.add.lm.pred = forecast(bin_train.add.lm, h = 12, level = 0)
+
+bin_train.auto.arima = auto.arima(bin.train)
+bin_train.auto.arima.pred = forecast(bin_train.auto.arima, h = 12, level = 0)
+
+# bin_train.expo.lm = tslm(bin.train ~ trend + season, lambda = 1)
+# pap_train.expo.lm.pred = forecast(bin_train.expo.lm, h = 12, level = 0)
+
+bin_train.add.hw = hw(bin.train, seasonal = "additive", h = 12, level = 0)
+# bin_train.mult.hw = hw(bin.train, seasonal = "multiplicative", h = 12, level = 0)
+
+bin_train.quad.lm = tslm(bin.train ~ trend + I(trend^2) + season, lambda = 1)
+bin_train.quad.lm.pred = forecast(bin_train.quad.lm, h = 12, level = 0)
+
+# Basic Additive Model was best 
+accuracy(bin_train.add.lm.pred, bin.valid)
+accuracy(bin_train.auto.arima.pred, bin.valid)
+accuracy(bin_train.add.hw, bin.valid)
+accuracy(bin_train.quad.lm.pred, bin.valid)
+# accuracy(bin_train.expo.lm.pred, bin.valid)
+# accuracy(bin_train.mult.hw, bin.valid)
+
+# autoplot(bin.train) + 
+#   autolayer(bin.valid, series = "Valid") + 
+#   autolayer(bin_train.auto.arima.pred, series = "Auto ARIMA")
+
+bin_for = tslm(bin.ts ~ trend + season)
+bin_for.pred = forecast(bin_for, h = 12)
+
+bin_for_graph = autoplot(bin.ts, size = 1) + 
+  autolayer(bin_for.pred, series = "Additive Model", PI = TRUE, size = 1) + 
+  autolayer(meanf(bin.ts, h = 12), series = "Mean", PI = FALSE, size = 1) + 
+  autolayer(naive(bin.ts, h = 12), series = "Naïve", PI = FALSE, size = 1) + 
+  xlab("Year") + 
+  ylab("Gross Margin (%)") + 
+  ggtitle("12 Month Binder GM Forecast (2018)") + 
+  guides(colour = guide_legend(title = "Forecast"))
+
+ggsave("bin_for_graph.png", plot = bin_for_graph, width = 8, height = 6, dpi = 500)
+
+bin_for_graph
+
+```
+
+```{r}
+# Due to negative values, seasonality can't be multiplicative
+mach_train.add.lm = tslm(mach.train ~ trend + season, lambda = 1)
+mach_train.add.lm.pred = forecast(mach_train.add.lm, h = 12, level = 0)
+
+mach_train.auto.arima = auto.arima(mach.train)
+mach_train.auto.arima.pred = forecast(mach_train.auto.arima, h = 12, level = 0)
+
+# bin_train.expo.lm = tslm(bin.train ~ trend + season, lambda = 1)
+# pap_train.expo.lm.pred = forecast(bin_train.expo.lm, h = 12, level = 0)
+
+mach_train.add.hw = hw(mach.train, seasonal = "additive", h = 12, level = 0)
+# bin_train.mult.hw = hw(bin.train, seasonal = "multiplicative", h = 12, level = 0)
+
+mach_train.quad.lm = tslm(mach.train ~ trend + I(trend^2) + season, lambda = 1)
+mach_train.quad.lm.pred = forecast(mach_train.quad.lm, h = 12, level = 0)
+
+# Additive Model was best
+accuracy(mach_train.add.lm.pred, mach.valid)
+accuracy(mach_train.auto.arima.pred, mach.valid)
+accuracy(mach_train.add.hw, mach.valid)
+accuracy(mach_train.quad.lm.pred, mach.valid)
+# accuracy(bin_train.expo.lm.pred, bin.valid)
+# accuracy(bin_train.mult.hw, bin.valid)
+
+mach_for = tslm(mach.ts ~ trend + season)
+mach_for.pred = forecast(mach_for, h = 12)
+
+mach_for_graph = autoplot(mach.ts, size = 1) + 
+  autolayer(mach_for.pred, series = "Additive Model", PI = TRUE, size = 1) + 
+  autolayer(meanf(mach.ts, h = 12), series = "Mean", PI = FALSE, size = 1) + 
+  autolayer(naive(mach.ts, h = 12), series = "Naïve", PI = FALSE, size = 1) + 
+  xlab("Year") + 
+  ylab("Gross Margin (%)") + 
+  ggtitle("12 Month Machine GM Forecast (2018)") + 
+  guides(colour = guide_legend(title = "Forecast"))
+
+ggsave("mach_for_graph.png", plot = mach_for_graph, width = 8, height = 6, dpi = 500)
+
+mach_for_graph
+```
+
+```{r}
+# Due to negative values, seasonality can't be multiplicative
+tab_train.add.lm = tslm(tab.train ~ trend + season, lambda = 1)
+tab_train.add.lm.pred = forecast(tab_train.add.lm, h = 12, level = 0)
+
+tab_train.auto.arima = auto.arima(tab.train)
+tab_train.auto.arima.pred = forecast(tab_train.auto.arima, h = 12, level = 0)
+
+# bin_train.expo.lm = tslm(bin.train ~ trend + season, lambda = 1)
+# pap_train.expo.lm.pred = forecast(bin_train.expo.lm, h = 12, level = 0)
+
+tab_train.add.hw = hw(tab.train, seasonal = "additive", h = 12, level = 0)
+# bin_train.mult.hw = hw(bin.train, seasonal = "multiplicative", h = 12, level = 0)
+
+tab_train.quad.lm = tslm(tab.train ~ trend + I(trend^2) + season, lambda = 1)
+tab_train.quad.lm.pred = forecast(tab_train.quad.lm, h = 12, level = 0)
+
+# Basic Additive Model was best 
+accuracy(tab_train.add.lm.pred, tab.valid)
+accuracy(tab_train.auto.arima.pred, tab.valid)
+accuracy(tab_train.add.hw, tab.valid)
+accuracy(tab_train.quad.lm.pred, tab.valid)
+# accuracy(bin_train.expo.lm.pred, bin.valid)
+# accuracy(bin_train.mult.hw, bin.valid)
+
+tab_for = tslm(tab.ts ~ trend + season)
+tab_for.pred = forecast(tab_for, h = 12)
+
+tab_for_graph = autoplot(tab.ts, size = 1) + 
+  autolayer(tab_for.pred, series = "Additive Model", PI = TRUE, size = 1) + 
+  autolayer(meanf(tab.ts, h = 12), series = "Mean", PI = FALSE, size = 1) + 
+  autolayer(naive(tab.ts, h = 12), series = "Naïve", PI = FALSE, size = 1) + 
+  xlab("Year") + 
+  ylab("Gross Margin (%)") + 
+  ggtitle("12 Month Tables GM Forecast (2018)") + 
+  guides(colour = guide_legend(title = "Forecast"))
+
+ggsave("tab_for_graph.png", plot = tab_for_graph, width = 8, height = 6, dpi = 500)
+
+tab_for_graph
+
+
+```
+
+```{r}
+dfs <- dfs %>% select(Ship.Date, Sales)
+
+
+# convert the "date" column to a date
+dfs$Ship.Date = as.Date(dfs$Ship.Date, format = "%m/%d/%Y")
+
+dfs$month = format(dfs$Ship.Date,
+                        format = "%Y-%m")
+
+# aggregate by sub.category and month
+dfs_agg = aggregate(cbind(Sales) ~  month, dfs, sum)
+
+dfs_agg = arrange(dfs_agg, month)
+
+# Removing all of January 2018 as it has significantly lower sales
+dfs_agg = dfs_agg[1:49, ]
+
+dfs_agg = arrange(dfs_agg, month)
+
+names(dfs_agg) = c("month", "sales")
+
+dfs.ts = ts(dfs_agg, start = c(2014, 1), end = c(2017, 12), freq = 12)[, -1]
+
+dfs.ts.diff = diff(dfs.ts)
+
+sales_szn = ggseasonplot(dfs.ts.diff) + 
+  geom_line(size = 1) + 
+  ggtitle("Seasonal Sales Change Year over Year")
+
+ggsave("sales_szn.png", plot = sales_szn, width = 8, height = 6, dpi = 500)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
